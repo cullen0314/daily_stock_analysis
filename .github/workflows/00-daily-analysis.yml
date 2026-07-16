@@ -58,6 +58,45 @@ jobs:
       - name: 创建必要目录
         run: |
           mkdir -p data logs reports
+
+      - name: 建立 Hermes 微信通知隧道
+        env:
+          HERMES_SSH_PRIVATE_KEY: ${{ secrets.HERMES_SSH_PRIVATE_KEY }}
+          HERMES_SSH_KNOWN_HOSTS: ${{ secrets.HERMES_SSH_KNOWN_HOSTS }}
+          HERMES_SSH_HOST: ${{ vars.HERMES_SSH_HOST || secrets.HERMES_SSH_HOST }}
+          HERMES_SSH_USER: ${{ vars.HERMES_SSH_USER || secrets.HERMES_SSH_USER || 'github-notify' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$HERMES_SSH_PRIVATE_KEY" ] || [ -z "$HERMES_SSH_KNOWN_HOSTS" ] || [ -z "$HERMES_SSH_HOST" ]; then
+            echo "Hermes SSH tunnel configuration is incomplete" >&2
+            exit 1
+          fi
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$HERMES_SSH_PRIVATE_KEY" > "$HOME/.ssh/hermes_notify"
+          printf '%s\n' "$HERMES_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/hermes_notify" "$HOME/.ssh/known_hosts"
+
+          ssh -f -N \
+            -i "$HOME/.ssh/hermes_notify" \
+            -o BatchMode=yes \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            -L 18644:127.0.0.1:8644 \
+            "$HERMES_SSH_USER@$HERMES_SSH_HOST"
+
+          for attempt in {1..10}; do
+            if curl -fsS --max-time 3 http://127.0.0.1:18644/health >/dev/null; then
+              echo "Hermes 微信通知隧道已就绪"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Hermes 微信通知隧道健康检查失败" >&2
+          exit 1
       
       - name: 执行股票分析
         env:
